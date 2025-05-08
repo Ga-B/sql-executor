@@ -1,0 +1,1 @@
+INSERT INTO test_table (name) VALUES ('Data from script 2');

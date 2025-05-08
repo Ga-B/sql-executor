@@ -1,0 +1,1 @@
+INSERTT INTO test_table (name) VALUES ('This will fail'); -- Intentional syntax error
