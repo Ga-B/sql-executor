@@ -1,1 +1,0 @@
-INSERT INTO test_table (name) VALUES ('Data for all_or_nothing');

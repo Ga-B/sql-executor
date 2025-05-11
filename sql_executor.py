@@ -20,15 +20,15 @@ from psycopg2.extensions import TRANSACTION_STATUS_INTRANS
 
 # --- Create log directory if it doesn't exist ---
 # Reports if it cannot be created, disabling file logging
-timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+timestamp = datetime.now().strftime("%Y-%m-%d__%H-%M-%S")
 LOG_DIR = pathlib.Path(f"./logs/{timestamp}")
-LOG_FILE = LOG_DIR / f"sql_executor_{timestamp}.log"
+LOG_FILE = LOG_DIR / f"all_logs_sql_executor.log"
 
 try:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
 except OSError as e:
     print(
-        f"WARNING: Could not create log directory '{LOG_DIR}'. "
+        f"WARNING: Could not create log directory './{LOG_DIR}'. "
         f"File logging disabled. Error: {e}",
         file=sys.stderr,
     )
@@ -58,10 +58,10 @@ if LOG_FILE:
         file_handler.setLevel(logging.INFO)
         file_handler.setFormatter(formatter)
         logger.addHandler(file_handler)
-        logger.info(f"Logging to console and to file {LOG_FILE}")
+        logger.info(f"Logging to console and to file './{LOG_FILE}'")
     except Exception as e:
         logger.error(
-            f"Failed to set up logging to file {LOG_FILE}: {e}", exc_info=True
+            f"Failed to set up logging to file './{LOG_FILE}': {e}", exc_info=True
         )
 
 
@@ -128,7 +128,7 @@ def connect_db(params, attempt_limit=5, delay=3):
 # ===== 4. FILE RETRIEVAL =====
 
 
-def collect_file_paths(dir_path, ext):
+def collect_sorted_file_paths(base_path, ext):
     """
     Finds files in the specified directory matching the given extension,
     recursively, and checks for file access/integrity.
@@ -137,12 +137,17 @@ def collect_file_paths(dir_path, ext):
     paths) and 'anomalies' (broken/irregular/inaccessible paths).
     """
     logging.info(
-        f"--- Searching recursively in '{dir_path}' (following symlinks)... ---"
+        f"--- Searching recursively in '{base_path}' (following symlinks)... ---"
     )
     files_found = []
     anomalies = []
-    for root, _, files in os.walk(dir_path, followlinks=True):
-        current_dir = pathlib.Path(root)
+    for dir_path, sub_dirs, files in os.walk(base_path, followlinks=True):
+        # Sort directory and file names naturally in place using natsort
+        # to ensure os.walk visits them in a "human-friendly" order.
+        sub_dirs[:] = natsorted(sub_dirs)
+        files[:] = natsorted(files)
+
+        current_dir = pathlib.Path(dir_path)
         for filename in files:
             if filename.endswith(ext):
                 full_path = current_dir / filename
@@ -173,6 +178,18 @@ def collect_file_paths(dir_path, ext):
                         exc_info=True,
                     )
                     anomalies.append(full_path)
+
+    logging.info(
+        f"~~~ Found {len(files_found)} '*.sql' file paths ~~~")
+    for file in files_found:
+        logging.info(f"{file}")
+
+    logging.info(
+        f"~~~ Found {len(anomalies)} file anomalies ~~~")
+    for file in anomalies:
+        logging.info(f"{file}")
+
+    logging.info("--- Search and sorting complete. ---")
     return {"files_found": files_found, "anomalies": anomalies}
 
 
@@ -590,6 +607,7 @@ def execute_sql_scripts_in_dir(conn, db_params, sql_dir, transaction_mode):
         return False
 
     results = {
+        "files_found": [],
         "processed": [],
         "file_anomalies": [],
         "errors": [],
@@ -601,22 +619,20 @@ def execute_sql_scripts_in_dir(conn, db_params, sql_dir, transaction_mode):
     }
     anomalies_count = 0
     cursor = None  # Keep track of cursor for final closing
-    sorted_sql_files = []
 
     try:
         logging.info("===== Starting processing of SQL script files =====")
-        logging.info(f"Transaction Mode: {transaction_mode}")
+        logging.info(f"Transaction Mode: '{transaction_mode}'")
 
         if not sql_dir.is_dir():
             logging.error(f"SQL script directory not found: {sql_dir}. Halting.")
             return False
 
         # --- Scan for SQL files ---
-        paths_found = collect_file_paths(dir_path=sql_dir, ext=".sql")
-        sql_files_found = paths_found["files_found"]
-        anomalies = paths_found["anomalies"]
-        anomalies_count = len(anomalies)
-        results["file_anomalies"] = natsorted(anomalies)
+        paths_found = collect_sorted_file_paths(base_path=sql_dir, ext=".sql")
+        results["files_found"] = paths_found["files_found"]
+        results["file_anomalies"] = paths_found["anomalies"]
+        anomalies_count = len(results["file_anomalies"])
 
         # --- Check for Fatal Scanning Errors ---
         if anomalies_count > 0:
@@ -628,7 +644,7 @@ def execute_sql_scripts_in_dir(conn, db_params, sql_dir, transaction_mode):
                     "File anomalies found (check logs for details). "
                     "Halting execution before transaction start."
                 )
-                for item in natsorted(anomalies):
+                for item in results["file_anomalies"]:
                     logging.warning(f" - File anomaly: {item}")
                 results["fatal_error_occurred"] = True
                 # results["file_anomalies"] is already populated before this block
@@ -637,15 +653,7 @@ def execute_sql_scripts_in_dir(conn, db_params, sql_dir, transaction_mode):
                 results["errors"].extend(results["file_anomalies"]) # Or keep them separate in reporting
                 return results
 
-        # --- Sort Found Files ---
-        logging.info(
-            f"Found {len(sql_files_found)} potential *.sql file paths. "
-            "Sorting naturally..."
-        )
-        sorted_sql_files = natsorted(sql_files_found, key=lambda p: p.as_posix())
-        logging.info("--- Search and sorting complete. ---")
-
-        if not sorted_sql_files:
+        if not results["files_found"]:
             logging.warning(
                 f"No valid SQL files found in {sql_dir}. Nothing to execute."
             )
@@ -654,30 +662,31 @@ def execute_sql_scripts_in_dir(conn, db_params, sql_dir, transaction_mode):
 
         # --- Delegate to Mode-Specific Workflow ---
         logging.info(
-            f"--- Starting execution of {len(sorted_sql_files)} *.sql files. ---"
+            f"--- Starting execution of {len(results["files_found"])} "
+            f"'*.sql' files. ---"
         )
 
         if transaction_mode == "per-file":
             # update results with the dictionary returned by the function
             results.update(
                 _process_per_file(
-                    results["connection"], db_params, sorted_sql_files
+                    results["connection"], db_params, results["files_found"]
                 )
             )
         elif transaction_mode == "per-file-until-error":
             results.update(
                 _process_per_file_until_error(
-                    results["connection"], db_params, sorted_sql_files
+                    results["connection"], db_params, results["files_found"]
                 )
             )
         elif transaction_mode == "all-or-nothing":
             results.update(
                 _process_all_or_nothing(
-                    results["connection"], db_params, sorted_sql_files
+                    results["connection"], db_params, results["files_found"]
                 )
             )
         else:
-            logging.error(f"Unknown transaction mode: {transaction_mode}")
+            logging.error(f"Unknown transaction mode: '{transaction_mode}'")
             results["fatal_error_occurred"] = True
             return False
 
@@ -733,7 +742,7 @@ def execute_sql_scripts_in_dir(conn, db_params, sql_dir, transaction_mode):
 
         # --- Final Summary ---
         logging.info("===== Execution Summary =====")
-        logging.info(f"Mode: {transaction_mode}")
+        logging.info(f"Mode: '{transaction_mode}'")
         if results["failed_all_or_nothing"]:
             description = "Files executed before fatal error/rollback:"
         else:
@@ -742,7 +751,7 @@ def execute_sql_scripts_in_dir(conn, db_params, sql_dir, transaction_mode):
         logging.info(f"Empty files found: {len(results['empty_files'])}")
         logging.info(f"Files skipped due to errors: {len(results['errors'])}")
         logging.info(f"Path scanning anomalies: {anomalies_count}")
-        logging.info(f"Check log directory {LOG_DIR} for more details.")
+        logging.info(f"Check log directory './{LOG_DIR}' for more details.")
         logging.info("=============================")
 
         return results
@@ -769,43 +778,41 @@ def execute_sql_scripts_in_dir(conn, db_params, sql_dir, transaction_mode):
                 logging.error(f"Error closing cursor: {e}")
 
         # --- Write Report Files ---
-        log_prefix = f"{timestamp}_{transaction_mode.replace("-", "_")}"
-
         # If failed_all_or_nothing, no scripts were committed
         processed_type = ("executable_files" if results["failed_all_or_nothing"]
                           else "committed_files")
         viewed = set(results["processed"]
                      + results["errors"]
                      + results["empty_files"])
-        results["unprocessed_files"] = [x for x in sorted_sql_files
+        results["unprocessed_files"] = [x for x in results["files_found"]
                                         if x not in viewed]
 
         try:
             # Write logs listing empty files, file anomalies, etc.
-            common_header = f"Mode: '{transaction_mode}' | Run: {timestamp}"
-            for suffix in [
+            common_header = f"Mode: '{transaction_mode}' | Date: {timestamp}"
+            for prefix in [
+                "files_found",
                 "processed",
                 "file_anomalies",
                 "errors",
                 "empty_files",
                 "unprocessed_files"
             ]:                    
-                if suffix == "processed":
-                    log_file = LOG_DIR / f"{log_prefix}_{processed_type}.txt"
-                else:
-                    log_file = LOG_DIR / f"{log_prefix}_{suffix}.txt"
+                listing = prefix if prefix != "processed" else processed_type
+
+                file_header = f"Listing: '{listing}' | " + common_header
+                log_file = LOG_DIR / f"{prefix}.log"
                 with open(log_file, "w", encoding="utf-8") as f:
-                    file_header = f"Listing: '{suffix}' | " + common_header
                     f.write(file_header)
                     f.write(f"\n{'-'*len(file_header)}\n")
                     f.write(
-                        "\n".join(map(str, results.get(suffix)))
-                        if results.get(suffix)
+                        "\n".join(map(str, results.get(prefix)))
+                        if results.get(prefix)
                         else "None"
                     )
 
             logging.info(
-                f"Report files created in '{LOG_DIR}'"
+                f"Report files created in './{LOG_DIR}'"
             )
         except Exception as report_err:
             logging.error(

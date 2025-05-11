@@ -1,7 +1,0 @@
-Listing: 'processed' | Mode: 'per-file' | Run: 1984-05-12__01-52-00
--------------------------------------------------------------------
-../01_create_table.sql
-../02_insert_good_1.sql
-../04_insert_good_2.sql
-../06_insert_good_3_for_all_or_nothing.sql
-../07_another_create_table.sql

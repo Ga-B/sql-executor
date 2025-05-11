@@ -1,48 +1,53 @@
 # SQL Script Executor for PostgreSQL
 
-This Python script automates the execution of SQL scripts from a specified directory against a PostgreSQL database. It offers robust logging, comprehensive error handling, and flexible transaction control, making it suitable for database migrations, setup procedures, or batch SQL operations.
+This Python script automates the execution of SQL scripts from a specified directory against a PostgreSQL database. It offers robust logging, comprehensive error handling, and flexible transaction control, making it suitable for setup procedures or batch SQL operations.
 
 ## Table of Contents
 
 1.  [Overview](#overview)
 2.  [Features](#features)
 3.  [Prerequisites](#prerequisites)
-4.  [Installation](#installation)
-5.  [Configuration](#configuration)
+6.  [Preparation](#preparation)
     * [Database Connection](#database-connection)
-    * [SQL Script Directory](#sql-script-directory)
+    * [Target SQL Scripts Directory](#target-sql-scripts-directory)
+5.  [Installation](#installation)
 6.  [Usage](#usage)
     * [Command-Line Arguments](#command-line-arguments)
     * [Examples](#examples)
-7.  [Transaction Modes Explained](#transaction-modes-explained)
+7.  [Transaction Modes in Detail](#transaction-modes-in-detail)
 8.  [Logging and Reporting](#logging-and-reporting)
 9.  [Error Handling](#error-handling)
-10. [Expected Directory Structure](#expected-directory-structure)
+10. [Default Directory Structure](#default-directory-structure)
+11. [Workflow Diagrams](#workflow-diagrams)
+    * [Overall Workflow](#overall-workflow)
+    * [Individual Modes](#individual-modes):
+        [`per-file`](#per-file),
+        [`per-file-until-error`](#per-file-until-error),
+        [`all-or-nothing`](#all-or-nothing).
 
 ## Overview
 
-This script connects to a PostgreSQL database and executes all `.sql` files found within a designated directory. Files are processed in a natural sort order (e.g., `1_script.sql`, `2_script.sql`, `10_script.sql`). The script provides multiple transaction handling modes to accommodate various deployment scenarios, from simple script sequences to complex, atomic database updates.
+This script connects to a PostgreSQL database and executes all `.sql` files found within a designated directory, recursively. Files are processed in a natural sort order (e.g., `1_script.sql`, `2_script.sql`, `10_script.sql`)  following the directory tree for predictable script execution sequence. The script provides three transaction handling modes to accommodate various deployment scenarios, from simple script sequences to complex, atomic database updates. There is an accompanying script to preview the sort order before processing.
 
 ## Features
 
-* **Automated SQL Execution:** Executes multiple `.sql` files in a defined, naturally sorted order.
+* **Automated SQL Execution:** `sql_executor.py` executes/commits multiple `.sql` files in a naturally sorted order.
+* **Preview sorting order:** The script **`sorted_sql_paths.py`** previews and logs all `.sql` files found **sorted, but with no further action**. It also logs a list of file anomalies found. Useful to assert processing order and file access.
 * **PostgreSQL Compatibility:** Specifically designed for PostgreSQL database interactions.
 * **Flexible Transaction Control:**
-    * `per-file`: Each script is executed in a separate transaction.
-    * `per-file-until-error`: Each script is executed in a separate transaction, halting on the first encountered error.
-    * `all-or-nothing`: All scripts are executed within a single transaction; any failure results in a complete rollback.
+    * `per-file`: Each script is commited in a separate transaction. Errors are skipped.
+    * `per-file-until-error`: Each script is commited in a separate transaction, halting execution on the first encountered error.
+    * `all-or-nothing`: All scripts are commited within a single transaction; any failure results in a complete rollback.
 * **Robust Database Connection:**
     * Implements retry logic for initial database connection attempts.
-    * Operates with `autocommit` disabled to ensure explicit transaction management.
+    * Operates with `autocommit = FALSE` to ensure explicit transaction management.
 * **Intelligent File Discovery:**
     * Recursively locates `.sql` files within the target directory.
     * Supports symbolic links.
     * Identifies and reports file access issues or path anomalies (e.g., broken symbolic links, non-regular files).
-    * Utilizes natural sort order for predictable script execution sequence.
 * **Comprehensive Logging:**
     * Outputs logs to both the console and a dedicated log file (`./logs/sql_executor.log`).
     * Includes detailed timestamps, log levels, and source module information.
-* **Detailed Execution Reports:**
     * Generates timestamped report files in the `./logs` directory, detailing:
         * Successfully committed/executed scripts.
         * Scripts that caused errors.
@@ -56,26 +61,63 @@ This script connects to a PostgreSQL database and executes all `.sql` files foun
 
 * **Python 3.x:** The script is developed for current Python 3 versions.
 * **PostgreSQL Server:** A running PostgreSQL instance is required for database operations.
-* **Python Libraries:**
+* **Required Python Libraries:**
     * `psycopg2-binary`: PostgreSQL adapter for Python.
     * `python-dotenv`: For loading environment variables from `.env` files.
     * `natsort`: For natural sorting of filenames.
 
+## Preparation
+
+### Database Connection
+
+The script utilizes environment variables for PostgreSQL connection parameters. These can be set as environment variables or defined in a `.env` file located in the script's project directory. The defaults given below are the same used in the official PostgreSQL Docker image. **Note:** Environment variables will override values specified in an `.env` file.
+
+* `DB_NAME`: The target database name (default: `postgres`).
+* `DB_USER`: The database username (default: `postgres`).
+* `DB_PASS`: The database user's passphrase (default: `mysecretpassword` - **it is strongly recommended to change this for any non-development environment**).
+* `DB_HOST`: The database server hostname or IP address (default: `localhost`).
+* `DB_PORT`: The port number for the database server (default: `5432`).
+
+**Example `.env` file:**
+```env
+DB_NAME="production_db"
+DB_USER="deploy_user"
+DB_PASS="not a weak passphrase"
+DB_HOST="db.example.com"
+DB_PORT=5432
+```
+
+
+### Target SQL Scripts Directory
+
+By default, the script targets `../` as the source for SQL files ([see diagram](#default-directory-structure)). For instance, if the script's path is `~/some_dir/sql_files/<project-directory>/sql_executor.py`, then `sql_executor.py` will process all SQL scripts inside `sql_files`, recursively. Alternatively, the path to the SQL scripts' top directory can be passed to this script via the `--sql-dir` (or simply `-d`) command-line argument.
+
+* In any case, logs are saved to `<project-directory>/logs/<timestamp>/`.
+
+* The default approach processes all target SQL scripts by simply installing and running this project's directory inside the top SQL scripts' directory. Logging would be isolated for each batch of SQL scripts.
+
+ * The approach of passing the SQL directory to the script allows installation anywhere. Logs would be centralized in the same directory for any batches of SQL files processed from the same installation.
+
+
 ## Installation
 
 1.  **Obtain the Script:**
-    In your project directory, clone the repository containing the script or save the script file (e.g., `sql_executor.py`).
+    Clone the repository containing the script, or save the script files to a directory, according to your [preferred approach](#target-sql-scripts-directory) (e.g., `~/sql_files/<project directory>/` if using the default approach).
 
-2.  **Establish a Virtual Environment (Recommended):**
-    Navigate to your project directory and create a dedicated virtual environment (isolating project dependencies is a standard best practice).
+2.  **Establish a Virtual Environment (Optional-Recommended):**
+    Navigate to your project directory and create a dedicated virtual environment.
 
-    * With Python's standard `venv`:
+    * **With Python's standard `venv`:**
     ```bash
+    # Create the environment
     cd <path_to_project_directory>
     python -m venv <environment_name>
-    source <environment_name>/bin/activate  # On Windows: <environment_name>\Scripts\activate
+
+    # Activate it according to your system:
+    source <environment_name>/bin/activate  # For Linux/macOS
+    <environment_name>\Scripts\activate  # For Windows
     ```
-    * With Conda:
+    * **Or with Conda:**
     ```bash
     conda create -n <environment_name>
     conda activate <environment_name>
@@ -96,60 +138,47 @@ This script connects to a PostgreSQL database and executes all `.sql` files foun
     conda install --file requirements.txt
     ```
 
-## Configuration
-
-### Database Connection
-
-The script utilizes environment variables for PostgreSQL connection parameters. These can be set in the operating system environment or defined in a `.env` file located in the script's execution directory. **Note:** Environment variables will override values specified in a `.env` file. The defaults given below are the same used in the official PostgreSQL Docker image.
-
-* `DB_NAME`: The target database name (default: `postgres`).
-* `DB_USER`: The database username (default: `postgres`).
-* `DB_PASS`: The database user's password (default: `mysecretpassword` - **it is strongly recommended to change this for any non-development environment**).
-* `DB_HOST`: The database server hostname or IP address (default: `localhost`).
-* `DB_PORT`: The port number for the database server (default: `5432`).
-
-**Example `.env` file:**
-```env
-DB_NAME="production_db"
-DB_USER="deploy_user"
-DB_PASS="not a weak passphrase"
-DB_HOST="db.example.com"
-DB_PORT=5432
-```
-
-
-### SQL Script Directory
-
-By default, the script targets `../` as the source for SQL files. For instance, if the script's path is `~/dir_1/dir_2/dir_3/sql_executor.py`, then it will process all SQL scripts inside `dir_2`, recursively. That way, to process your SQL scripts you can simply drop this project's directory inside the top SQL scripts' directory.
-
-Alternatively, the path to the SQL scripts' top directory can be passed to this script via the `--sql-dir` command-line argument.
-
 ## Usage
 
-Execute the script from the command line.
+Execute the scripts `sql_executor.py` and `sorted_sql_paths.py` from the command line.
 
 ### Command-Line Arguments
 
-```bash
-# Long version
-python sql_executor.py --transaction-mode <MODE> [--sql-dir <PATH_TO_SQL_FILES>]
+* #### **For `sorted_sql_paths.py`**
 
-# Short version
-python sql_executor.py -t <MODE> [-d <PATH_TO_SQL_FILES>]
-```
+    ```bash
+    # Long version
+    python sorted_sql_paths.py [--sql-dir <PATH_TO_SQL_FILES>]
 
-* **`--transaction-mode` (short version `-t`) (Required):** Defines the transaction handling strategy.
+    # Short version
+    python sorted_sql_paths.py [-d <PATH_TO_SQL_FILES>]
+    ```
+  * **`--sql-dir` (short version `-d`) (Optional):** Specifies the path to the directory containing `.sql` files. Defaults to `../` if not provided.
+
+* #### **For `sql_executor.py`**
+
+    ```bash
+    # Long version
+    python sql_executor.py --transaction-mode <MODE> [--sql-dir <PATH_TO_SQL_FILES>]
+
+    # Short version
+    python sql_executor.py -t <MODE> [-d <PATH_TO_SQL_FILES>]
+    ```
+
+  * **`--transaction-mode` (short version `-t`) (Required):** Defines the transaction handling strategy.
     * `per-file`: Each script is committed individually. Database errors lead to a rollback for that specific script, and execution proceeds to the next. File read errors result in skipping the problematic file.
     * `all-or-nothing`: All scripts are processed within a single transaction. This transaction is committed only if all scripts (and pre-execution file checks) complete without error. Any failure at any stage triggers a full rollback and halts processing.
     * `per-file-until-error`: Each script is committed individually. However, processing halts upon the first error encountered (scan, file, or database). A rollback is attempted for the script that caused the error.
-* **`--sql-dir` (short version `-d`) (Optional):** Specifies the path to the directory containing `.sql` files.
-    * Default: `../`
+
+    You can find more details [below](#transaction-modes-explained).
+
+  * **`--sql-dir` (short version `-d`) (Optional):** Specifies the path to the directory containing `.sql` files. Defaults to `../` if not provided.
 
 ### Examples
 
-1.  **Execute scripts in `per-file` mode from `../sql_files`:**
+1.  **Preview sorting order for scripts in `../sql_files`:**
     ```bash
-    python sql_executor.py --transaction-mode per-file --sql-dir ../sql_files
+    python sorted_sql_paths.py --sql-dir ../sql_files
     ```
 
 2.  **Execute scripts in `all-or-nothing` mode from `./database/migrations`:**
@@ -162,7 +191,7 @@ python sql_executor.py -t <MODE> [-d <PATH_TO_SQL_FILES>]
     python sql_executor.py -t per-file-until-error --sql-dir deployment_scripts
     ```
 
-## Transaction Modes Explained
+## Transaction Modes in Detail
 
 Selecting the appropriate transaction mode is critical for ensuring data integrity and predictable deployment outcomes.
 
@@ -186,14 +215,15 @@ Selecting the appropriate transaction mode is critical for ensuring data integri
 The script provides extensive logging for traceability and audit purposes.
 
 * **Console Logging:** Provides real-time operational feedback.
-* **File Logging (`./logs/sql_executor.log`):** Maintains a persistent record of all operations. The `logs` directory is automatically created if it does not exist.
+* **File Logging (`./logs/<timestamp>/all_logs_sql_executor_<timestamp>.log`):** Maintains a persistent record of all operations. The `logs` directory is automatically created if it does not exist.
     * Log Format: `YYYY-MM-DD HH:MM:SS - LEVEL - [module:lineno] - message`
-* **Execution Report Files:** Post-execution, timestamped text files are generated in the `./logs` directory, categorized by the outcome:
-    * `*_committed_files.txt` (or `*_executable_files.txt` if `all-or-nothing` failed): Lists scripts successfully included in a commit (or those that would have been, prior to a global rollback).
-    * `*_errors.txt`: Details scripts that encountered errors during processing or execution.
-    * `*_empty_files.txt`: Identifies `.sql` files that were found but contained no executable content.
-    * `*_file_anomalies.txt`: Reports paths identified as `.sql` files but were inaccessible, broken links, or not regular files.
-    * `*_unprocessed_files.txt`: Lists scripts found but not attempted due to an earlier fatal error halting execution (primarily relevant for `all-or-nothing` and `per-file-until-error` modes).
+* **Execution Report Files:** Post-execution log files are generated in the `./logs/<timestamp>/` directory, categorized by outcome:
+    * `files_found.log` lists all accessible `.sql` files found.
+    * `file_anomalies.log`: Reports paths identified as `.sql` files but were inaccessible, broken links, or not regular files.
+    * `committed_files.log` (or `executable_files.log` if mode `all-or-nothing` failed): Lists scripts successfully included in a commit (or those that would have been, prior to a global rollback).
+    * `errors.log`: Details scripts that encountered errors during processing or execution.
+    * `empty_files.log`: Identifies `.sql` files that were found but contained no executable content. These files don't raise an error.
+    * `unprocessed_files.log`: Lists scripts found but not attempted due to an earlier fatal error halting execution (primarily relevant for `all-or-nothing` and `per-file-until-error` modes).
 
 These reports serve as valuable resources for auditing deployment processes and troubleshooting issues.
 
@@ -215,56 +245,194 @@ The script incorporates mechanisms to manage various error conditions:
 
 The script endeavors to ensure the database connection is properly closed and transactions are appropriately managed (committed or rolled back) upon completion or error.
 
-## Expected Directory Structure
+## Default Directory Structure
 
 A typical project layout might be as follows:
-
 ```
-your_database_project/
-├── sql_executor.py         # This script
-├── requirements.txt        # Python dependencies
-├── .env                    # Optional: for DB credentials (ensure this is in .gitignore)
-├── sql_scripts/            # Directory for SQL files
-│   ├── 01_create_schemas.sql
-│   ├── 02_create_tables.sql
-│   ├── ...
-│   └── 10_seed_initial_data.sql
-└── logs/                   # Automatically created for log and report files
-    ├── sql_executor.log
-    ├── <timestamp>_<mode>_committed_files.txt
-    └── ... (other report files)
+sql_files/                      # Directory for SQL files
+    ├── 1_create_schemas.sql               -┐
+    ├── 2_create_tables.sql                 │
+    ├── ...                                 │
+    ├── 10_seed_initial_data.sql            │
+    ├── sub_directory/                      ├── SQL scripts
+    │       ├── 1_create_sub_schemas.sql    │
+    │       ├── 2_update_tables.sql         │
+    │       └── 3_clean_up.sql             -┘
+    │
+    └── sql-executor/
+            ├── sql_executor.py         # Processing script
+            ├── sorted_sql_paths.py     # Script to preview sorting
+            ├── requirements.txt        # Python dependencies
+            ├── .env                    # Optional: for DB credentials
+            └── logs/                   # Automatically created for log files
+                    │
+                    └── <timestamp>/
+                            ├── all_logs_sql_executor.log       # Comprehensive log 
+                            ├── files_found.log
+                            ├── committed_files.log             # Not if `all-or-nothing` fails
+                            ├── executable_files.log            # Only if `all-or-nothing` fails
+                            ├── unprocessed_files.log
+                            ├── empty_files.log
+                            ├── errors.log
+                            └── anomalies.log
+```
 
+## Workflow Diagrams
 
-├── sql_scripts/            # Directory for SQL files
-│   ├── 01_create_schemas.sql
-│   ├── 02_create_tables.sql
-│   ├── ...
-│   └── 10_seed_initial_data.sql
-├── script_directory/
-    ├── sql_executor.py         # This script
-    ├── requirements.txt        # Python dependencies
-    ├── .env                    # Optional: for DB credentials (ensure this is in .gitignore)
-    └── logs/                   # Automatically created for log and report files
-        ├── sql_executor.log
-        ├── <timestamp>_<mode>_committed_files.txt
-        └── ... (other report files)
+### Overall workflow
 
-sql_scripts/            # Directory for SQL files
-│   ├── 01_create_schemas.sql
-│   ├── 02_create_tables.sql
-|   ├── ...
-│   ├── 10_seed_initial_data.sql
-│   └── sub_directory/
-|         ├── 11_create_sub_schemas.sql
-│         ├── 12_update_tables.sql
-│         └── 13_clean_up.sql
-| 
-├── executor_directory/
-    ├── sql_executor.py         # This script
-    ├── requirements.txt        # Python dependencies
-    ├── .env                    # Optional: for DB credentials (ensure this is in .gitignore)
-    └── logs/                   # Automatically created for log and report files
-        ├── sql_executor.log
-        ├── <timestamp>__<mode>__committed_files.txt
-        └── ... (other report files)
+```mermaid
+graph TD
+    A[Start 'sql_executor.py'] --> B(Load Config / Setup Logging);
+    style A fill:#f0f0f0,stroke:#333,stroke-width:2px
+    B --> C{Connect to DB?};
+    C -- Yes --> D[Scan SQL Dir for Files & Anomalies];
+    C -- No / Retry Fails --> ExitFail["Log CRITICAL & Exit(1)"];
+
+    D --> E{Scan Anomalies Found?};
+    E -- Yes --> F{"Mode Halts on Scan Error?<br/>(all-or-nothing / per-file-until-error)"};
+    F -- Yes --> HaltFatal[Log CRITICAL & Mark Failure];
+    F -- No --> G[Log Warning];
+    E -- No --> H[Get & Sort Valid SQL Files];
+    G --> H;
+
+    H --> I{Files Found?};
+    I -- No --> J[Log 'No files' & Mark Success];
+    I -- Yes --> K{Choose Mode from Args};
+
+    subgraph Process Files Loop
+        direction LR
+        K -- per-file --> L[Execute/Commit Per File.<br/>Log errors, Rollback file, CONTINUE loop];
+        K -- per-file-until-error --> M[Execute/Commit Per File.<br/>Log CRITICAL, Rollback, HALT loop on ANY error];
+        K -- all-or-nothing --> N[Execute All in ONE Transaction.<br/>Log CRITICAL, Rollback ALL, HALT loop on ANY error];
+    end
+
+    L --> O{Loop Finished};
+    M -- Halted --> P[Fatal Error Occurred];
+    M -- Finished OK --> O;
+    N -- Halted --> P;
+    N -- Finished OK --> Q{"Final Commit Needed? (all-or-nothing)"};
+
+    HaltFatal --> P;
+
+    Q -- Yes --> R{Attempt Final Commit};
+    R -- Success --> O;
+    R -- Fail --> S[Log CRITICAL, Rollback];
+    S --> P;
+    Q -- No --> O;
+
+    O --> Success[Mark Success];
+    P --> Failure[Mark Failure];
+
+    Success --> T(Generate Report Files);
+    Failure --> T;
+    J ----> T;
+
+    T --> End{"End Script<br/>Exit(0) on Success<br/>Exit(1) on Failure"};
+
+    
+```
+---
+
+### Individual modes
+
+#### `per-file`
+
+```mermaid
+
+graph TD
+    TITLE1["**per-file**"]-->S1
+    style TITLE1 fill:#f0f0f0,stroke:#333,stroke-width:2px
+    S1[Loop Start: For each file];
+    S2{Ensure Connection};
+    S3{Read File};
+    S4[Check Empty];
+    S5{Execute SQL};
+    S6{Commit};
+    S7[Add to Processed List];
+    S8["Handle Errors: Log, Rollback (DB Err), Add to Error List"];
+    S9[Continue to Next File];
+    S1 --> S2;
+    S2 -- OK --> S3;
+    S2 -- Fail --> S10[Set Conn Fail Flag & Break Loop];
+    S3 -- OK --> S4;
+    S3 -- Fail --> S8;
+    S4 -- Empty --> S9;
+    S4 -- Not Empty --> S5;
+    S5 -- OK --> S6;
+    S5 -- Fail --> S8;
+    S6 -- OK --> S7;
+    S6 -- Fail --> S8;
+    S7 --> S9;
+    S8 --> S9;
+    S9 --> S1;
+    S10 --> S_End[End Loop];
+    S9 -.-> S_End;
+```
+---
+
+#### `per-file-until-error`
+
+```mermaid
+
+graph TD
+    TITLE2["**per-file-until-error**"]-->T1
+    style TITLE2 fill:#f0f0f0,stroke:#333,stroke-width:2px
+    T1[Loop Start: For each file];
+    T2{Ensure Connection};
+    T3{Read File};
+    T4[Check Empty];
+    T5{Execute SQL};
+    T6{Commit};
+    T7[Add to Processed List];
+    T8[Handle Errors: Log, Rollback, Set Fatal Flag, Break Loop];
+    T9[Continue to Next File];
+    T1 --> T2;
+    T2 -- OK --> T3;
+    T2 -- Fail --> T10[Set Fatal Flag & Break Loop];
+    T3 -- OK --> T4;
+    T3 -- Fail --> T8;
+    T4 -- Empty --> T9;
+    T4 -- Not Empty --> T5;
+    T5 -- OK --> T6;
+    T5 -- Fail --> T8;
+    T6 -- OK --> T7;
+    T6 -- Fail --> T8;
+    T7 --> T9;
+    T8 --> T_End[End Loop];
+    T9 --> T1;
+    T10 --> T_End;
+    T9 -.-> T_End;
+```
+---
+
+#### `all-or-nothing`
+
+```mermaid
+
+graph TD
+    TITLE3["**all-or-nothing**"]-->U1
+    style TITLE3 fill:#f0f0f0,stroke:#333,stroke-width:2px
+    U1[Loop Start: For each file];
+    U2{Ensure Connection};
+    U3{Read File};
+    U4[Check Empty];
+    U5{Execute SQL};
+    U6["Add to Processed List (Tentative)"];
+    U7[Handle Errors: Log, Rollback, Set Fatal Flag, Break Loop];
+    U8[Continue to Next File];
+    U1 --> U2;
+    U2 -- OK --> U3;
+    U2 -- Fail --> U9[Set Fatal Flag & Break Loop];
+    U3 -- OK --> U4;
+    U3 -- Fail --> U7;
+    U4 -- Empty --> U8;
+    U4 -- Not Empty --> U5;
+    U5 -- OK --> U6;
+    U5 -- Fail --> U7;
+    U6 --> U8;
+    U7 --> U_End[End Loop];
+    U8 --> U1;
+    U9 --> U_End;
+    U8 -.-> U_End;
 ```
