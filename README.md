@@ -108,20 +108,20 @@ By default, the script targets `../` as the source for SQL files ([see diagram](
     Navigate to your project directory and create a dedicated virtual environment.
 
     * **With Python's standard `venv`:**
-    ```bash
-    # Create the environment
-    cd <path_to_project_directory>
-    python -m venv <environment_name>
+        ```bash
+        # Create the environment
+        cd <path_to_project_directory>
+        python -m venv <environment_name>
 
-    # Activate it according to your system:
-    source <environment_name>/bin/activate  # For Linux/macOS
-    <environment_name>\Scripts\activate  # For Windows
-    ```
+        # Activate it according to your system:
+        source <environment_name>/bin/activate  # For Linux/macOS
+        <environment_name>\Scripts\activate  # For Windows
+        ```
     * **Or with Conda:**
-    ```bash
-    conda create -n <environment_name>
-    conda activate <environment_name>
-    ```
+        ```bash
+        conda create -n <environment_name>
+        conda activate <environment_name>
+        ```
 
 3.  **Install Dependencies:**
     Use the provided `requirements.txt`, or create the file in your project root with the following content:
@@ -170,7 +170,7 @@ Execute the scripts `sql_executor.py` and `sorted_sql_paths.py` from the command
     * `all-or-nothing`: All scripts are processed within a single transaction. This transaction is committed only if all scripts (and pre-execution file checks) complete without error. Any failure at any stage triggers a full rollback and halts processing.
     * `per-file-until-error`: Each script is committed individually. However, processing halts upon the first error encountered (scan, file, or database). A rollback is attempted for the script that caused the error.
 
-    You can find more details [below](#transaction-modes-explained).
+    You can find more details [below](#transaction-modes-in-detail).
 
   * **`--sql-dir` (short version `-d`) (Optional):** Specifies the path to the directory containing `.sql` files. Defaults to `../` if not provided.
 
@@ -178,7 +178,7 @@ Execute the scripts `sql_executor.py` and `sorted_sql_paths.py` from the command
 
 1.  **Preview sorting order for scripts in `../sql_files`:**
     ```bash
-    python sorted_sql_paths.py --sql-dir ../sql_files
+    python sorted_sql_paths.py
     ```
 
 2.  **Execute scripts in `all-or-nothing` mode from `./database/migrations`:**
